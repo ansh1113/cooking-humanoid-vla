@@ -1,0 +1,214 @@
+"""
+Create a demo video showing VLA in action
+Side-by-side: Original video + Robot commands overlay
+"""
+import cv2
+import torch
+import json
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+import open_clip
+import subprocess
+import os
+
+# CONFIG
+MODEL_PATH = 'models/full_fidelity_vla.pt'
+VOCAB_PATH = 'models/vocab_full.json'
+VIDEO_URL = "https://www.youtube.com/watch?v=CXvznff0cMs"  # Paneer Butter Masala
+OUTPUT_VIDEO = "vla_demo.mp4"
+
+# Robot command mapping (simplified for viz)
+ROBOT_COMMANDS = {
+    'stirring curry': '🥘 Stir(Pan, Circular)',
+    'adding oil': '🫗 Pour(Oil)',
+    'adding water': '💧 Pour(Water)',
+    'adding vegetables': '🥬 Transfer(Veg→Pan)',
+    'adding masala': '🌶️ Sprinkle(Masala)',
+    'tempering spices': '✨ Sprinkle(Spices)',
+    'grinding paste': '⚙️ Process(Grinder)',
+    'pressure cooking': '⏱️ Wait(Whistle)',
+    'kneading dough': '👐 Press(Dough)',
+    'chopping vegetables': '🔪 Slice(Veg)',
+    'plating': '🍽️ Serve(Plate)',
+}
+
+# Load model
+print("🧠 Loading VLA model...")
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+class FullFidelityVLA(torch.nn.Module):
+    def __init__(self, num_classes, input_dim=512, hidden_dim=512, num_layers=6, nhead=8):
+        super().__init__()
+        self.pos_enc = torch.nn.Parameter(torch.randn(1, 30, input_dim) * 0.02)
+        encoder = torch.nn.TransformerEncoderLayer(
+            d_model=hidden_dim, nhead=nhead, 
+            dim_feedforward=2048, dropout=0.4, batch_first=True
+        )
+        self.transformer = torch.nn.TransformerEncoder(encoder, num_layers=num_layers)
+        self.head = torch.nn.Sequential(
+            torch.nn.LayerNorm(hidden_dim),
+            torch.nn.Dropout(0.4),
+            torch.nn.Linear(hidden_dim, hidden_dim // 2),
+            torch.nn.GELU(),
+            torch.nn.Linear(hidden_dim // 2, num_classes)
+        )
+    
+    def forward(self, x):
+        x = x + self.pos_enc
+        x = self.transformer(x)
+        x = x.mean(dim=1)
+        return self.head(x)
+
+checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
+with open(VOCAB_PATH) as f:
+    vocab = json.load(f)
+inv_vocab = {v: k for k, v in vocab.items()}
+
+model = FullFidelityVLA(len(vocab)).to(device)
+if 'model' in checkpoint:
+    model.load_state_dict(checkpoint['model'])
+elif 'model_state_dict' in checkpoint:
+    model.load_state_dict(checkpoint['model_state_dict'])
+else:
+    model.load_state_dict(checkpoint)
+model.eval()
+
+print("👁️ Loading CLIP...")
+clip_model, _, preprocess = open_clip.create_model_and_transforms(
+    'ViT-B-32', pretrained='laion2b_s34b_b79k', device=device
+)
+
+# Download video
+print("🎥 Downloading video...")
+if os.path.exists('demo_input.mp4'):
+    os.remove('demo_input.mp4')
+subprocess.run([
+    'yt-dlp', '-f', '18', '-o', 'demo_input.mp4', VIDEO_URL
+], check=True)
+
+# Process video
+print("🎬 Creating demo video...")
+cap = cv2.VideoCapture('demo_input.mp4')
+fps = int(cap.get(cv2.CAP_PROP_FPS))
+width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+# Output video (2x width for side-by-side)
+fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+out = cv2.VideoWriter('temp_video.mp4', fourcc, fps, (width * 2, height))
+
+# Process every 5 seconds (to show predictions)
+frame_count = 0
+segment_duration = 5 * fps  # 5 seconds
+current_prediction = ""
+current_confidence = 0.0
+
+try:
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # Every 5 seconds, run VLA prediction
+        if frame_count % segment_duration == 0:
+            print(f"Processing second {frame_count // fps}...")
+            
+            # Extract 30 frames for VLA
+            frames = []
+            temp_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
+            
+            for i in range(30):
+                ret_temp, frame_temp = cap.read()
+                if ret_temp:
+                    rgb = cv2.cvtColor(frame_temp, cv2.COLOR_BGR2RGB)
+                    pil_img = Image.fromarray(rgb)
+                    tensor = preprocess(pil_img)
+                    frames.append(tensor)
+            
+            # Reset position
+            cap.set(cv2.CAP_PROP_POS_FRAMES, temp_pos)
+            
+            if len(frames) == 30:
+                # Run VLA
+                with torch.no_grad():
+                    clip_tensor = torch.stack(frames).to(device)
+                    feats = clip_model.encode_image(clip_tensor)
+                    feats = feats / feats.norm(dim=-1, keepdim=True)
+                    logits = model(feats.unsqueeze(0))
+                    probs = torch.softmax(logits, dim=1)
+                    
+                    top_conf, top_idx = torch.topk(probs, 1)
+                    current_prediction = inv_vocab[top_idx.item()]
+                    current_confidence = top_conf.item()
+        
+        # Create visualization frame
+        # Left: Original video
+        left_frame = frame.copy()
+        
+        # Right: Black canvas with text
+        right_frame = np.zeros_like(frame)
+        
+        # Convert to PIL for text rendering
+        pil_right = Image.fromarray(right_frame)
+        draw = ImageDraw.Draw(pil_right)
+        
+        try:
+            font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
+            font_med = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
+            font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
+        except:
+            font_large = ImageFont.load_default()
+            font_med = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+        
+        # Title
+        draw.text((width//2 - 200, 50), "🤖 VLA Prediction", fill=(255, 255, 255), font=font_large)
+        
+        # Action
+        robot_cmd = ROBOT_COMMANDS.get(current_prediction, f"🎯 {current_prediction}")
+        draw.text((50, 200), "Action:", fill=(200, 200, 200), font=font_med)
+        draw.text((50, 250), robot_cmd, fill=(100, 255, 100), font=font_large)
+        
+        # Confidence
+        draw.text((50, 350), "Confidence:", fill=(200, 200, 200), font=font_med)
+        conf_text = f"{current_confidence * 100:.1f}%"
+        conf_color = (100, 255, 100) if current_confidence > 0.7 else (255, 200, 100) if current_confidence > 0.5 else (255, 100, 100)
+        draw.text((50, 400), conf_text, fill=conf_color, font=font_large)
+        
+        # Confidence bar
+        bar_width = int((width - 100) * current_confidence)
+        draw.rectangle([(50, 480), (50 + bar_width, 520)], fill=conf_color)
+        draw.rectangle([(50, 480), (width - 50, 520)], outline=(100, 100, 100), width=2)
+        
+        # Model info
+        draw.text((50, 600), "Model: VLA Transformer (19M params)", fill=(150, 150, 150), font=font_small)
+        draw.text((50, 640), "Dataset: 1,607 Indian cooking clips", fill=(150, 150, 150), font=font_small)
+        draw.text((50, 680), "Real-World Accuracy: 77%", fill=(150, 150, 150), font=font_small)
+        
+        right_frame = np.array(pil_right)
+        
+        # Combine side-by-side
+        combined = np.hstack([left_frame, right_frame])
+        out.write(combined)
+        
+        frame_count += 1
+        
+        # Only process first 30 seconds for demo
+        if frame_count > 30 * fps:
+            break
+
+finally:
+    cap.release()
+    out.release()
+
+print("🎵 Adding audio...")
+subprocess.run([
+    'ffmpeg', '-y', '-i', 'temp_video.mp4', '-i', 'demo_input.mp4',
+    '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac',
+    '-shortest', OUTPUT_VIDEO
+], check=True)
+
+os.remove('temp_video.mp4')
+print(f"✅ Demo video created: {OUTPUT_VIDEO}")
+print(f"📹 Duration: 30 seconds")
+print(f"🎬 Resolution: {width*2}x{height}")

@@ -1,0 +1,5 @@
+torch>=2.0.0
+open-clip-torch>=2.20.0
+opencv-python>=4.8.0
+yt-dlp>=2023.7.0
+openai-whisper>=20230314
