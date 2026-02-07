@@ -1,12 +1,12 @@
-# Humanoid Cooking VLA
-**Vision–Language–Action Learning for Humanoid Cooking Robots**
+# Cooking VLA
+**Vision–Language–Action Learning for Humanoid Manipulation**
 
 <p align="center">
   <img src="assets/demo.gif" width="720"/>
 </p>
 
 <p align="center">
-  <b>From real-world cooking videos → structured humanoid robot actions</b>
+  <b>From real-world cooking videos → structured robot actions</b>
 </p>
 
 <p align="center">
@@ -48,13 +48,7 @@ These results demonstrate improved action prediction consistency and robustness 
 
 ## Architecture
 
-YouTube Video
-↓
-Whisper (ASR) + CLIP (Vision)
-↓
-Vision-Language-Action Transformer
-↓
-Humanoid Robot Commands
+YouTube Video → Whisper (ASR) + CLIP (Vision) → Vision-Language-Action Transformer → Robot Commands
 
 The system integrates speech, vision, and temporal reasoning into a unified policy for long-horizon manipulation.
 
@@ -64,7 +58,7 @@ The system integrates speech, vision, and temporal reasoning into a unified poli
 
 ### Project 1 — AI2-THOR Agent
 Hybrid navigation + manipulation pipeline  
-**~85–90% success rate** across kitchen environments
+**~85–90% success rate** across kitchen and indoor environments
 
 ### Project 2 — VLA Transformer
 19M-parameter multimodal sequence model  
