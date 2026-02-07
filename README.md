@@ -44,6 +44,12 @@ The model learns to translate **unstructured real-world cooking videos** into **
 
 These results demonstrate improved action prediction consistency and robustness across diverse cooking scenarios.
 
+### A12-THOR Simulations
+
+<p align="center">
+  <img src="assets/PutAppleInFridge.gif" width="480"/>
+</p>
+
 ---
 
 ## Architecture
